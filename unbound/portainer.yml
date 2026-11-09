@@ -1,0 +1,27 @@
+# Unbound for Portainer
+#
+# Paste this into Portainer: Stacks, Add stack, Web editor.
+# Same as compose.yml, with absolute paths to the configs in /opt/DNS, since
+# Portainer CE stacks can't use relative paths. If you cloned the repo somewhere
+# else, change /opt/DNS in the volumes lines.
+
+services:
+  unbound:
+    container_name: unbound
+    image: alpinelinux/unbound:latest
+    ports:
+      - "127.0.0.1:5335:5335/tcp"
+      - "127.0.0.1:5335:5335/udp"
+    volumes:
+      - /opt/DNS/unbound/unbound.conf:/etc/unbound/unbound.conf:ro
+    networks:
+      dns-net:
+        ipv4_address: 172.30.53.4
+    restart: unless-stopped
+
+# Shared with the PowerDNS Recursor stack and anything else that needs DNS.
+# Create it once before the first start, see the README.
+networks:
+  dns-net:
+    external: true
+    name: dns-net
