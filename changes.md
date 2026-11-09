@@ -1,5 +1,14 @@
 # Changes
 
+2026.11.09 - Backend overhaul
+
+* Unbound's root trust anchor now comes from the host's dns-root-data package, mounted at /etc/unbound/root.key, instead of the copy inside the Alpine image
+* Added the root.key mount to both unbound/compose.yml and unbound/portainer.yml
+* README: dns-root-data as a prerequisite and setup step, SERVFAIL troubleshooting, and a section on router DNS redirects causing lookup loops
+* maintenance.md: checks for the host's root key and for router DNS hijacking
+
+Reasons for changes: Unbound SERVFAILed on every lookup with the image's trust anchor, and worked once pointed at dns-root-data's root.key. The host's package manager keeps that file current through root key changes. A router DNS redirect also caused a lookup loop during setup, so the docs now cover how to spot and fix it.
+
 2026.11.09 - Portainer support
 
 * Added portainer.yml to unbound/ and pdns-recursor/, the same stacks with absolute paths to /opt/DNS

@@ -35,11 +35,13 @@ Both are set up the same way:
 
 - Docker, plus either the compose plugin or Portainer
 - git, or download the repo as a zip from GitHub
+- The root DNSSEC key on the host at /usr/share/dns/root.key, for Unbound. On Debian and Ubuntu that's the dns-root-data package.
 - Nothing else on the host using ports 5335 or 5354
+- If your router forces all DNS through itself, like GL.iNet's DNS override, the host has to be excluded from that. See "Router DNS redirects" below.
 
 ## Setup
 
-Steps 1 to 3 happen in the terminal either way.
+Steps 1 to 4 happen in the terminal either way.
 
 1. Clone the repo: `git clone https://github.com/NullAngst/DNS.git /opt/DNS`. I use /opt/DNS, since that's where portainer.yml expects it. If you put it somewhere else, change the paths in both portainer.yml files to match.
 2. Create the shared network once: `docker network create --driver bridge --subnet 172.30.53.0/24 --gateway 172.30.53.1 dns-net`
@@ -47,20 +49,23 @@ Steps 1 to 3 happen in the terminal either way.
    2.5. If that fails with an overlapping-subnet error, something already uses 172.30.53.0/24. Pick another subnet and change it everywhere: the compose.yml and portainer.yml files, the `access-control` line in unbound.conf, and `allow_from` in recursor.yml.
 
 3. Make the configs readable, since neither resolver runs as root inside its container: `chmod 644 /opt/DNS/unbound/* /opt/DNS/pdns-recursor/*`
+4. Install the root key for Unbound. I use apt, so in my case `apt install dns-root-data`. It depends on your system, but you need the root key file at /usr/share/dns/root.key, or change that path in Unbound's compose.yml and portainer.yml to wherever your distro puts it. Check it has the current root key: `grep -c 38696 /usr/share/dns/root.key` should print 1.
+
+   WITHOUT THIS FILE, UNBOUND WON'T START. With an outdated one, it starts but every lookup SERVFAILs.
 
 ### With Portainer
 
-4. In Portainer, go to Stacks, then Add stack. Name it `unbound`, pick Web editor, and paste the contents of `unbound/portainer.yml`.
-5. Click Deploy the stack.
-6. Add another stack named `pdns-recursor`, Web editor, and paste the contents of `pdns-recursor/portainer.yml`.
-7. Click Deploy the stack.
+5. In Portainer, go to Stacks, then Add stack. Name it `unbound`, pick Web editor, and paste the contents of `unbound/portainer.yml`.
+6. Click Deploy the stack.
+7. Add another stack named `pdns-recursor`, Web editor, and paste the contents of `pdns-recursor/portainer.yml`.
+8. Click Deploy the stack.
 
 Don't use Portainer's Repository option for these. It clones the repo into Portainer's own data folder, and the config mounts end up pointing at paths that don't exist on the host.
 
 ### With docker compose
 
-4. Start Unbound: `cd /opt/DNS/unbound && docker compose up -d`
-5. Start the Recursor: `cd /opt/DNS/pdns-recursor && docker compose up -d`
+5. Start Unbound: `cd /opt/DNS/unbound && docker compose up -d`
+6. Start the Recursor: `cd /opt/DNS/pdns-recursor && docker compose up -d`
 
 ## Testing
 
@@ -72,7 +77,17 @@ From the host:
 - `docker exec pdns-recursor rec_control get-tas` should list key tag 38696, the current root key.
 - Check the logs for errors, with `docker logs unbound` and `docker logs pdns-recursor`, or in Portainer under Containers, then the container, then Logs. The Recursor log should show it listening on port 5354 and loading /etc/powerdns/rebind.lua.
 
-If Unbound answers dnssec-failed.org, the trust anchor file probably isn't where unbound.conf expects. Find it with `docker exec unbound find / -name '*.key' -path '*dnssec*'`, then fix the `trust-anchor-file` line to match.
+If either resolver SERVFAILs on everything:
+
+- Run the same `dig` with `+cd` on the end, which turns validation off. If it answers with `+cd` and fails without, that resolver's root key is stale. For Unbound, check `grep -c 38696 /usr/share/dns/root.key` on the host and update dns-root-data. For the Recursor, update the image.
+- If it fails both ways, the resolver can't reach the root servers. From the host, `dig @198.41.0.4 . NS +norec` should show `aa` in the flags and list 13 root servers. If it shows `ra` and no answers, your router is hijacking port 53. See "Router DNS redirects" below.
+- After fixing either one, restart the container. Both resolvers remember servers they couldn't reach and stop trying them for a while.
+
+## Router DNS redirects
+
+Some routers force every device's DNS through themselves, GL.iNet's DNS override for one. That catches the resolvers' own queries to the root servers and hands them to whatever DNS the router uses. If that's your Pi-hole or AdGuard Home, which forwards back to these resolvers, you've got a loop. The signs are SERVFAIL on everything, and a flood of lookups for `.` in Pi-hole or AdGuard Home's log with your router as the client.
+
+The fix is to exclude the host from the redirect on the router. For OpenWrt and GL.iNet, [exclude-script.sh](https://github.com/MZGSZM/scripts/tree/main/linux) does it. Then restart both containers.
 
 ## Using them from Pi-hole or AdGuard Home
 

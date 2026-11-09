@@ -12,6 +12,8 @@ services:
       - "127.0.0.1:5335:5335/udp"
     volumes:
       - ./unbound.conf:/etc/unbound/unbound.conf:ro
+      # Root trust anchor from the host, install dns-root-data first
+      - /usr/share/dns/root.key:/etc/unbound/root.key:ro
     networks:
       dns-net:
         ipv4_address: 172.30.53.4

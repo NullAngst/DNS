@@ -16,7 +16,7 @@ Terminal: in `/opt/DNS/unbound` and `/opt/DNS/pdns-recursor`, run `docker compos
 
 Then clean up old images with `docker image prune`, or Images, then Remove unused in Portainer.
 
-Updating Unbound also updates its root trust anchor file, since that comes from Alpine's dnssec-root package inside the image. An Unbound image left alone for years can fall behind a root key change and start failing DNSSEC on everything.
+Unbound's root trust anchor comes from the host, not the image, so also update the host's packages. I use apt, so in my case `apt update && apt upgrade`, which keeps dns-root-data current. Use whichever package manager your system has. A stale root key makes Unbound SERVFAIL on everything after the next root key change.
 
 ## 3. Check for a newer PowerDNS Recursor series
 
@@ -34,7 +34,12 @@ A series that stops getting releases also stops getting security fixes, so don't
 
 - `dig @127.0.0.1 -p 5335 dnssec-failed.org` and `dig @127.0.0.1 -p 5354 dnssec-failed.org` should both SERVFAIL.
 - `docker exec pdns-recursor rec_control get-tas` should list the current root key.
-- If either log shows "Bogus" for `.` or the root, that resolver's image is behind on the root key. Updating the image is the fix.
+- `grep -c 38696 /usr/share/dns/root.key` on the host should print 1. That's Unbound's root key. When the root zone moves to a newer key, this check needs the new key tag, which ICANN announces well in advance.
+- If either log shows "Bogus" or validation failures for `.`, that resolver is behind on the root key. For Unbound, update dns-root-data on the host and restart the container. For the Recursor, update the image.
+
+## 4.5. Check the router isn't hijacking DNS
+
+From the host: `dig @198.41.0.4 . NS +norec` should show `aa` and 13 root servers. Router firmware updates can wipe the exclusion, and then both resolvers fail. See "Router DNS redirects" in the README.
 
 ## 5. Check both resolvers are taking traffic
 
