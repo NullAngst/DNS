@@ -1,0 +1,25 @@
+# Unbound recursive resolver
+#
+# Published on 127.0.0.1 only, so the host can use it but nothing else on the
+# network can. Containers on the dns-net network reach it at 172.30.53.4:5335.
+
+services:
+  unbound:
+    container_name: unbound
+    image: alpinelinux/unbound:latest
+    ports:
+      - "127.0.0.1:5335:5335/tcp"
+      - "127.0.0.1:5335:5335/udp"
+    volumes:
+      - ./unbound.conf:/etc/unbound/unbound.conf:ro
+    networks:
+      dns-net:
+        ipv4_address: 172.30.53.4
+    restart: unless-stopped
+
+# Shared with the PowerDNS Recursor stack and anything else that needs DNS.
+# Create it once before the first start, see the README.
+networks:
+  dns-net:
+    external: true
+    name: dns-net

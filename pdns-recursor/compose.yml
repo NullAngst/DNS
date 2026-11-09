@@ -1,0 +1,29 @@
+# PowerDNS Recursor
+#
+# Published on 127.0.0.1 only, so the host can use it but nothing else on the
+# network can. Containers on the dns-net network reach it at 172.30.53.5:5354.
+
+services:
+  pdns-recursor:
+    container_name: pdns-recursor
+    # PowerDNS names images by release series: pdns-recursor-54 is 5.4.x.
+    # No image follows the newest series, so check for a newer one every
+    # couple of months. See maintenance.md.
+    image: powerdns/pdns-recursor-54:latest
+    ports:
+      - "127.0.0.1:5354:5354/tcp"
+      - "127.0.0.1:5354:5354/udp"
+    volumes:
+      - ./recursor.yml:/etc/powerdns/recursor.yml:ro
+      - ./rebind.lua:/etc/powerdns/rebind.lua:ro
+    networks:
+      dns-net:
+        ipv4_address: 172.30.53.5
+    restart: unless-stopped
+
+# Shared with the Unbound stack and anything else that needs DNS.
+# Create it once before the first start, see the README.
+networks:
+  dns-net:
+    external: true
+    name: dns-net

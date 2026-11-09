@@ -1,0 +1,42 @@
+# PowerDNS Recursor settings, YAML format (default since Recursor 5.2)
+
+incoming:
+  # Listen on all container interfaces. Docker only publishes it on 127.0.0.1.
+  listen:
+    - 0.0.0.0
+  port: 5354
+  # Only the host and the containers on dns-net
+  allow_from:
+    - 127.0.0.0/8
+    - 172.30.53.0/24
+  udp_truncation_threshold: 1232
+
+outgoing:
+  # IPv4 only. Docker bridges have no IPv6 unless you turn it on.
+  # Add "::" here if yours does.
+  source_address:
+    - 0.0.0.0
+  edns_bufsize: 1232
+
+recursor:
+  threads: 1
+  # Hide DNS server info
+  server_id: disabled
+  version_string: none
+  qname_minimization: true
+  # Raise very short TTLs to 60 seconds. Higher breaks CDN and failover records.
+  minimum_ttl_override: 60
+  # Strip private addresses from answers, same as Unbound's private-address
+  lua_dns_script: /etc/powerdns/rebind.lua
+
+dnssec:
+  # The 5.4 image ships the current root trust anchors, including KSK-2024
+  validation: validate
+  aggressive_nsec_cache_size: 100000
+
+recordcache:
+  max_ttl: 14400
+  # Serve expired records for up to an hour if refresh fails (120 x 30 seconds)
+  serve_stale_extensions: 120
+  # Refresh popular records before they expire
+  refresh_on_ttl_perc: 10
