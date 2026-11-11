@@ -12,7 +12,7 @@ Do this every couple of months. Each step has the Portainer way and the terminal
 
 Portainer: open each stack, click Editor, then Update the stack with "Re-pull image and redeploy" turned on.
 
-Terminal: in `/opt/DNS/unbound` and `/opt/DNS/pdns-recursor`, run `docker compose pull && docker compose up -d`.
+Terminal: in `/opt/DNS/unbound` and `/opt/DNS/pdns-recursor`, and `/opt/DNS/dnsdist` if you run it, run `docker compose pull && docker compose up -d`.
 
 Then clean up old images with `docker image prune`, or Images, then Remove unused in Portainer.
 
@@ -29,6 +29,18 @@ PowerDNS names its images by release series, so pulling never moves you from 5.4
 5. Add an entry to changes.md.
 
 A series that stops getting releases also stops getting security fixes, so don't skip this.
+
+## 3.5. Check for a newer dnsdist series
+
+Same naming: `powerdns/dnsdist-21` is 2.1.x. Look for a higher `dnsdist-NN` under the powerdns organization on Docker Hub, but check the changelog at dnsdist.org before moving to it. PowerDNS publishes the image for a new series while it's still in alpha and beta, so an image existing doesn't mean the series is released. Wait for the .0 final.
+
+1. Read the dnsdist upgrade guide for that series, looking for removed or renamed Lua functions used in dnsdist.conf.
+2. Change the image line in both `dnsdist/compose.yml` and `dnsdist/portainer.yml` and commit it.
+3. Portainer: paste the new portainer.yml into the dnsdist stack's editor and Update the stack with re-pull on. Terminal: `docker compose up -d` in `/opt/DNS/dnsdist`.
+4. Run the dnsdist tests in the README.
+5. Add an entry to changes.md.
+
+Since 2.1, dnsdist looks for dnsdist.yml before dnsdist.conf. The compose files pass `--config /etc/dnsdist/dnsdist.conf`, so that doesn't matter here. Keep that flag.
 
 ## 4. Check DNSSEC still works
 
@@ -54,14 +66,26 @@ From another machine on your network:
 
 If either answers, the `127.0.0.1:` prefix fell off a port line. Check both the file in the repo and the copy in Portainer's stack editor, since they can drift apart.
 
+If you run dnsdist, also from outside the server's network:
+
+- `dig -p 5300 @<server> example.com` should time out. If it answers, AdGuard Home's plain DNS port is open and people can go around dnsdist.
+- `dig @<server> example.com TXT` should come back with `tc` set and no answer. If it answers, the dnsdist rules aren't loaded or something other than dnsdist has port 53.
+
+## 6.5. Check the dnsdist blocklist
+
+- Run `bash /opt/DNS/dnsdist/update-blocklist.sh` by hand. It should say the list is unchanged or updated. A download error or a refusal means the cron job has been failing too.
+- `docker logs dnsdist 2>&1 | grep blocklist` should show the loaded count and no "Skipping invalid" lines. The script already filters bad lines, so any there means the file was edited by hand.
+- `crontab -l` should still have the update line.
+
 ## 7. Check memory
 
-`docker stats --no-stream unbound pdns-recursor`, or the container stats page in Portainer. Unbound's caches can grow to about 384MB plus overhead. The Recursor counts cache entries, not bytes, so watch it over a few days. Lower `rrset-cache-size` and `msg-cache-size` in unbound.conf, or add `max_entries` under `recordcache` in recursor.yml, if either uses more than you like.
+`docker stats --no-stream unbound pdns-recursor dnsdist`, or the container stats page in Portainer. dnsdist has no cache configured, so it should stay small. Unbound's caches can grow to about 384MB plus overhead. The Recursor counts cache entries, not bytes, so watch it over a few days. Lower `rrset-cache-size` and `msg-cache-size` in unbound.conf, or add `max_entries` under `recordcache` in recursor.yml, if either uses more than you like.
 
 ## 8. After editing a config
 
 - For Unbound, check it first: `docker exec unbound unbound-checkconf`
-- Restart the container: `docker restart unbound` or `docker restart pdns-recursor`, or Restart in Portainer under Containers.
+- For dnsdist, check it first: `docker exec dnsdist dnsdist --check-config -C /etc/dnsdist/dnsdist.conf`
+- Restart the container: `docker restart unbound`, `docker restart pdns-recursor` or `docker restart dnsdist`, or Restart in Portainer under Containers.
 - Run the README tests.
 - Add an entry to changes.md.
 
@@ -69,6 +93,6 @@ If either answers, the `127.0.0.1:` prefix fell off a port line. Check both the 
 
 They should only differ in the volume paths and the comment at the top. Any change to an image, port, IP or network goes in both. To check, from /opt/DNS:
 
-`diff unbound/compose.yml unbound/portainer.yml` and `diff pdns-recursor/compose.yml pdns-recursor/portainer.yml`
+`diff unbound/compose.yml unbound/portainer.yml`, `diff pdns-recursor/compose.yml pdns-recursor/portainer.yml` and `diff dnsdist/compose.yml dnsdist/portainer.yml`
 
 Anything showing up besides the header comment and the `volumes` lines is drift.

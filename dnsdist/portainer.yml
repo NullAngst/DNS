@@ -1,0 +1,24 @@
+# dnsdist for Portainer
+#
+# Paste this into Portainer: Stacks, Add stack, Web editor.
+# Same as compose.yml, with absolute paths to the configs in /opt/DNS, since
+# Portainer CE stacks can't use relative paths. If you cloned the repo somewhere
+# else, change /opt/DNS in the volumes lines.
+
+services:
+  dnsdist:
+    container_name: dnsdist
+    # PowerDNS names images by release series: dnsdist-21 is 2.1.x.
+    # No image follows the newest series, so check for a newer one every
+    # couple of months. See maintenance.md.
+    image: powerdns/dnsdist-21:latest
+    network_mode: host
+    # Starts as root so it can bind port 53 on the host, then drops to the
+    # image's pdns user once the sockets are open.
+    user: root
+    command: ["--config", "/etc/dnsdist/dnsdist.conf", "--uid", "pdns", "--gid", "pdns"]
+    volumes:
+      - /opt/DNS/dnsdist/dnsdist.conf:/etc/dnsdist/dnsdist.conf:ro
+      # A folder, not the file, so the blocklist can be swapped out atomically
+      - /opt/DNS/dnsdist/blocklist:/etc/dnsdist/blocklist:ro
+    restart: unless-stopped

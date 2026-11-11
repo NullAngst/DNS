@@ -11,11 +11,13 @@ Each one is its own stack, so you can run either or both. Run both and point you
 
 Both are published on the host's 127.0.0.1 only, so nothing else on your network can use them. Other containers reach them over a shared Docker network called `dns-net`.
 
+There's also an optional third stack, dnsdist, for running AdGuard Home as a public resolver. It sits on port 53 in front of AdGuard Home and handles rate limiting, an IP blocklist and abuse rules for plain DNS. Most people don't need it. See "dnsdist" below.
+
 ## What's in each folder
 
 - `compose.yml` for running it with `docker compose` from the terminal. Uses relative paths, so it works wherever you clone the repo.
 - `portainer.yml` for running it as a Portainer stack. Same thing with absolute paths to /opt/DNS, since Portainer CE stacks can't use relative paths.
-- The config: `unbound.conf` for Unbound, `recursor.yml` and `rebind.lua` for the Recursor.
+- The config: `unbound.conf` for Unbound, `recursor.yml` and `rebind.lua` for the Recursor, `dnsdist.conf` and `update-blocklist.sh` for dnsdist.
 
 Use one or the other for each resolver, not both. They create the same container name, so the second one fails.
 
@@ -111,11 +113,73 @@ Then set the upstreams to the dns-net addresses:
 - Pi-hole: `FTLCONF_dns_upstreams: '172.30.53.4#5335;172.30.53.5#5354'` in its environment, or Settings, DNS in the web UI.
 - AdGuard Home: `172.30.53.4:5335` and `172.30.53.5:5354` on separate lines under Settings, DNS settings, Upstream DNS servers. I use load balancing so both resolvers take traffic, since a backup that never gets queries can sit broken for months without you knowing.
 
+## dnsdist
+
+This stack is for a public resolver: AdGuard Home answering the internet, with dnsdist taking plain DNS on port 53 in front of it. AdGuard Home keeps DoH, DoT and DoQ itself, since abuse like TXT reflection floods hits plain DNS and nothing else. If your AdGuard Home or Pi-hole only serves your own network, skip this stack.
+
+What `dnsdist.conf` does, in order, first match wins:
+
+- Drops anything from an address in `blocklist/blocked.txt`
+- Drops ANY queries
+- Answers TXT, DNSKEY and RRSIG over UDP with TC, so real clients retry over TCP and spoofed ones get nothing big back
+- Answers TC to any IP over 20 queries a second on UDP, counted per /32 for IPv4 and per /64 for IPv6. TC instead of a drop, so a lot of users behind one NAT still resolve.
+- Drops any IP over 100 queries a second
+- Sends the rest to AdGuard Home on 127.0.0.1:5300
+
+There's also an emergency line, commented out, that forces TC on every UDP query. Uncomment it during a flood you can't otherwise shake, and comment it back out after.
+
+### Why it's not on dns-net
+
+The other two stacks use dns-net. This one uses host networking, and that's on purpose. Why? Because dnsdist's rules are all per client address, so it has to see the real one. With a published port on a bridge network, Docker hands IPv6 connections to docker-proxy, which forwards them over IPv4 unless you've set up IPv6 on that network. Every IPv6 client then shows up as the bridge gateway, 172.30.53.1. They all share one 20 qps bucket, so they all get TC, and IPv6 entries in the blocklist never match anything. Host networking skips docker-proxy and the NAT entirely.
+
+The catch is that the image runs as an unprivileged user, and on the host network it can't bind port 53. So the container starts as root and dnsdist drops to the image's pdns user right after it opens its sockets, with `--uid pdns --gid pdns`.
+
+### Prerequisites
+
+- AdGuard Home's plain DNS listener moved off 53, to 5300. I run AdGuard Home on the host, so in my case that's `127.0.0.1:5300`. If yours is in Docker on dns-net, change the `newServer` line in dnsdist.conf to its dns-net address, like `172.30.53.2:5300`, since 127.0.0.1 here is the host.
+- Port 5300 closed from outside, in your firewall or by having AdGuard Home listen on 127.0.0.1 only. Otherwise people can go around dnsdist.
+- Nothing else on port 53. If you ran dnsdist on the host before, stop it first: `systemctl disable --now dnsdist`. Check with `ss -lntup 'sport = :53'`.
+- curl or wget on the host, for the blocklist script.
+
+### Setup
+
+1. Read the `setACL` line in `/opt/DNS/dnsdist/dnsdist.conf`. It allows everyone, since this is for a public resolver.
+
+   THIS MAKES YOUR SERVER AN OPEN RESOLVER. On anything that isn't meant to be public, change it to your own ranges first. The comment above it has an example.
+
+2. Make the config readable: `chmod 644 /opt/DNS/dnsdist/dnsdist.conf`
+3. Pull the blocklist once, before the first start: `bash /opt/DNS/dnsdist/update-blocklist.sh -n`. That creates `/opt/DNS/dnsdist/blocklist/blocked.txt`. The `-n` skips the restart, since there's nothing running yet. By default it pulls [BlissDNS badips.txt](https://github.com/BlissDNS/info), use `-u` for a different list.
+4. Deploy it.
+   - Portainer: Stacks, Add stack, name it `dnsdist`, Web editor, paste the contents of `dnsdist/portainer.yml`, Deploy the stack.
+   - Terminal: `cd /opt/DNS/dnsdist && docker compose up -d`
+5. Add the blocklist update to cron, as root or a user in the docker group: `crontab -e`, then `17 4 * * * bash /opt/DNS/dnsdist/update-blocklist.sh >/dev/null`. That's once a day at 4:17. Errors still get mailed by cron since only stdout is thrown away.
+
+The script checks every line before using it, refuses a list with nothing valid in it, and refuses one that shrank by more than half unless you add `-f`. It only restarts dnsdist when the list actually changed. dnsdist reads the list once at startup, so the restart is how a new list loads. That's about a second where port 53 doesn't answer, and UDP clients retry, so most people won't notice. It also resets the rate limit counters.
+
+### Testing
+
+Run these from a machine outside the server's network, with your server's public address:
+
+- `dig @<server> example.com` should answer.
+- `dig @<server> example.com TXT` should show `tc` in the flags and no answer. `dig +tcp @<server> example.com TXT` should answer.
+- `dig @<server> example.com ANY` should time out.
+- `dig -p 5300 @<server> example.com` should time out. IF IT ANSWERS, ANYONE CAN SKIP DNSDIST.
+- Over IPv6 too, if the server has it: `dig -6 @<server> example.com`
+
+On the server:
+
+- `docker logs dnsdist` should show `Loaded N blocklist entries`, listening on 0.0.0.0:53 and [::]:53, and `Marking downstream adguard (127.0.0.1:5300) as 'up'`. If it says `down`, dnsdist can't reach AdGuard Home on 5300.
+- `docker top dnsdist` should show dnsdist running as pdns (UID 953), not root.
+
+If dnsdist logs `Address already in use`, something else has port 53. On Ubuntu that can be systemd-resolved's stub listener: set `DNSStubListener=no` in /etc/systemd/resolved.conf and `systemctl restart systemd-resolved`.
+
 ## Changing a config
 
-Edit the file in /opt/DNS, then restart that container: `docker restart unbound` or `docker restart pdns-recursor`, or the Restart button in Portainer under Containers. The configs are mounted, so a restart picks up the change. No redeploy needed.
+Edit the file in /opt/DNS, then restart that container: `docker restart unbound`, `docker restart pdns-recursor` or `docker restart dnsdist`, or the Restart button in Portainer under Containers. The configs are mounted, so a restart picks up the change. No redeploy needed.
 
 For Unbound, check the config first: `docker exec unbound unbound-checkconf`. A typo stops Unbound from starting.
+
+For dnsdist: `docker exec dnsdist dnsdist --check-config -C /etc/dnsdist/dnsdist.conf`. Same deal, a typo and it won't start.
 
 ## Notes
 
@@ -123,5 +187,6 @@ For Unbound, check the config first: `docker exec unbound unbound-checkconf`. A 
 - `so-rcvbuf: 1m` in unbound.conf only works if the host allows it. If Unbound logs that it wasn't granted, put `net.core.rmem_max = 1048576` in a file under /etc/sysctl.d/ and run `sysctl --system`.
 - The rebinding protection blocks loopback too. Domains that point at 127.0.0.1 on purpose, like some local development setups, won't resolve.
 - `git pull` in /opt/DNS updates the configs. Restart the containers afterward. If the update changed a portainer.yml, paste the new version into that stack's editor in Portainer too, since Portainer keeps its own copy.
+- The blocklist under dnsdist/blocklist/ is generated, so it's in .gitignore and `git pull` never touches it.
 
-Now Unbound and PowerDNS Recursor are both resolving from the root servers with DNSSEC, reachable from the host and anything on dns-net, and closed to everything else. Tinker with the cache sizes and thread counts as you see fit.
+Now Unbound and PowerDNS Recursor are both resolving from the root servers with DNSSEC, reachable from the host and anything on dns-net, and closed to everything else. If you run dnsdist, it's on port 53 in front of AdGuard Home, rate limiting and dropping blocklisted addresses before they reach it. Tinker with the cache sizes, thread counts and rate limits as you see fit.

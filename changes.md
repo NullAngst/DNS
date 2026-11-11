@@ -1,5 +1,19 @@
 # Changes
 
+2026.11.11 - dnsdist stack
+
+* Added dnsdist/ with compose.yml and portainer.yml for powerdns/dnsdist-21, on host networking, starting as root and dropping to pdns after binding port 53
+* dnsdist.conf ported from the host install: AdGuard Home on 127.0.0.1:5300 as the backend, open ACL, ANY dropped, TC for TXT, DNSKEY and RRSIG over UDP, 20 qps per IP UDP limit with TC, 100 qps hard limit
+* Blocklist and ANY drops moved above the emergency TC rule, so blocked addresses get nothing back even with it on
+* Emergency force-TCP rule left commented out
+* Blocklist moved to /etc/dnsdist/blocklist/blocked.txt, mounted as a folder. Bad lines in it are now skipped with a warning instead of stopping dnsdist from starting, and inline # comments are allowed.
+* update-blocklist.sh: downloads BlissDNS badips.txt, checks every line, refuses an empty list or one that shrank by more than half, swaps the file in atomically and restarts dnsdist only when the list changed
+* .gitignore for the generated blocklist
+* README: dnsdist section covering what it does, why host networking, prerequisites, setup, cron and testing
+* maintenance.md: dnsdist series check, outside port checks, blocklist check, and dnsdist added to the image, memory, config and drift steps
+
+Reasons for changes: dnsdist was running straight on the host while everything else in this repo runs in Docker. Host networking keeps the real client address on every query, which the per-IP rate limits and the blocklist depend on.
+
 2026.11.09 - Backend overhaul
 
 * Unbound's root trust anchor now comes from the host's dns-root-data package, mounted at /etc/unbound/root.key, instead of the copy inside the Alpine image

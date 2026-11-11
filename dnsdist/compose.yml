@@ -1,0 +1,22 @@
+# dnsdist front end for AdGuard Home
+#
+# Host networking, so dnsdist binds the host's port 53 directly and sees the real
+# client address on every query. Not on dns-net, see the README for why.
+
+services:
+  dnsdist:
+    container_name: dnsdist
+    # PowerDNS names images by release series: dnsdist-21 is 2.1.x.
+    # No image follows the newest series, so check for a newer one every
+    # couple of months. See maintenance.md.
+    image: powerdns/dnsdist-21:latest
+    network_mode: host
+    # Starts as root so it can bind port 53 on the host, then drops to the
+    # image's pdns user once the sockets are open.
+    user: root
+    command: ["--config", "/etc/dnsdist/dnsdist.conf", "--uid", "pdns", "--gid", "pdns"]
+    volumes:
+      - ./dnsdist.conf:/etc/dnsdist/dnsdist.conf:ro
+      # A folder, not the file, so the blocklist can be swapped out atomically
+      - ./blocklist:/etc/dnsdist/blocklist:ro
+    restart: unless-stopped
